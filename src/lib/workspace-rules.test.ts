@@ -33,9 +33,14 @@ describe("workspace rules", () => {
 
 import { isValidWorkspaceSlug, workspaceSlug } from "./workspace-rules";
 describe("workspace address rout.be/w/<name>", () => {
-  it("ends in exactly 2 digits", () => expect(workspaceSlug("Acme Studio", 7)).toBe("acme-studio07"));
-  it("is at least 6 characters for short names", () => expect(workspaceSlug("AB", 42).length).toBeGreaterThanOrEqual(6));
-  it("rejects a slug without 2 trailing digits", () => expect(isValidWorkspaceSlug("acmeteam")).toBe(false));
-  it("rejects slugs shorter than 6", () => expect(isValidWorkspaceSlug("ab12")).toBe(false));
-  it("accepts a valid slug", () => expect(isValidWorkspaceSlug("acme42")).toBe(true));
+  it("accepts a brand name without digits", () => expect(isValidWorkspaceSlug("nike")).toBe(true));
+  it("accepts 3 characters", () => expect(isValidWorkspaceSlug("abc")).toBe(true));
+  it("rejects slugs shorter than 3", () => expect(isValidWorkspaceSlug("ab")).toBe(false));
+  it("rejects uppercase and other symbols", () => expect(isValidWorkspaceSlug("Acme_Corp")).toBe(false));
+  it("rejects reserved words", () => {
+    for (const w of ["admin", "api", "auth", "u", "w", "studio", "settings", "rout"]) expect(isValidWorkspaceSlug(w)).toBe(false);
+  });
+  it("builds the slug from the name", () => expect(workspaceSlug("Acme Corp")).toBe("acme-corp"));
+  it("adds a suffix when taken", () => expect(workspaceSlug("Acme Corp", 1)).toBe("acme-corp-2"));
+  it("never builds a reserved slug", () => expect(isValidWorkspaceSlug(workspaceSlug("Studio"))).toBe(true));
 });
