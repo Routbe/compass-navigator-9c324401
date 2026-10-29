@@ -24,7 +24,7 @@ export const getPublicWorkspace = createServerFn({ method: "GET" })
                where p.workspace_id = w.id and coalesce((p.display_prefs->>'publicProfile')::boolean, true)
                order by p.created_at limit 1) as profile_handle
       from public.workspaces w
-      where w.slug = ${data.slug} and coalesce(w.public_page, true)
+      where w.slug = ${data.slug}
       limit 1
     `) as { name: string; slug: string; avatar_url: string | null; domain: string | null; profile_handle: string | null }[];
     const r = rows[0];

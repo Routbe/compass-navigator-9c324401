@@ -7,7 +7,6 @@ alter table public.workspaces add constraint workspaces_slug_check check (
   and slug not in ('admin', 'api', 'auth', 'u', 'w', 'studio', 'settings', 'rout')
 ) not valid;
 
-alter table public.workspaces add column if not exists public_page boolean not null default true;
 
 -- Scope columns for the remaining data features (personal = workspace_id is null).
 alter table if exists public.link_clicks add column if not exists workspace_id uuid references public.workspaces(id) on delete cascade;
