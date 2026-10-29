@@ -13,8 +13,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useI18n } from "@/lib/i18n";
 import {
   actOnBooking, addBookingCalendar, getBookingStudio, removeBookingCalendar, saveAvailabilityRules,
-  saveBookingEventType, setBookingEventTypeActive, syncBookingCalendar,
+  saveBookingEventType, setBookingEventTypeActive, syncBookingCalendar, addAvailabilityException, removeAvailabilityException,
 } from "@/lib/booking-engine/booking.functions";
+import type { IntakeField } from "@/lib/booking-engine/intake";
 
 type Studio = Extract<Awaited<ReturnType<typeof getBookingStudio>>, { ready: true }>;
 type EventType = Studio["eventTypes"][number];
@@ -126,6 +127,13 @@ function Requests({ data }: { data: Studio }) {
               <p className="text-sm text-foreground">{fmt.format(new Date(b.startUtc))}</p>
               <p className="truncate text-sm text-muted-foreground">{b.guestName} · {b.guestEmail} · {b.guestTimezone}</p>
               {b.guestNote && <p className="whitespace-pre-wrap text-sm text-muted-foreground">{b.guestNote}</p>}
+              {b.intake.length > 0 && (
+                <dl className="mt-2 grid gap-1 rounded-lg border border-border bg-background p-2 text-sm">
+                  {b.intake.map((a) => (
+                    <div key={a.label} className="flex flex-wrap gap-x-2"><dt className="font-medium">{a.label}:</dt><dd className="whitespace-pre-wrap text-muted-foreground">{a.value}</dd></div>
+                  ))}
+                </dl>
+              )}
             </div>
             <div className="flex shrink-0 flex-wrap gap-2">
               {b.status === "requested" && (
@@ -152,6 +160,7 @@ type Draft = {
   bufferAfterMinutes: number; minimumNoticeHours: number; maxDaysAhead: number; confirmationMode: "instant" | "request";
   price: string; locationKind: "video" | "address" | "phone"; locationValue: string;
   routingStrategy: "STRICT" | "ROUND_ROBIN" | "COLLECTIVE"; hostUserIds: string[];
+  resourceCapacity: number; customFields: IntakeField[];
 };
 
 const slugify = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "afspraak";
@@ -163,12 +172,12 @@ function toDraft(e: EventType | null, userId: string): Draft {
         bufferBeforeMinutes: e.bufferBeforeMinutes, bufferAfterMinutes: e.bufferAfterMinutes, minimumNoticeHours: e.minimumNoticeHours,
         maxDaysAhead: e.maxDaysAhead, confirmationMode: e.confirmationMode, price: e.priceCents == null ? "" : (e.priceCents / 100).toFixed(2),
         locationKind: e.locationKind, locationValue: e.locationValue ?? "", routingStrategy: e.routingStrategy,
-        hostUserIds: e.hosts.map((h) => h.userId),
+        hostUserIds: e.hosts.map((h) => h.userId), resourceCapacity: e.resourceCapacity, customFields: e.customFields,
       }
     : {
         id: null, workspace: false, title: "", slug: "", durationMinutes: 30, bufferBeforeMinutes: 0, bufferAfterMinutes: 0,
         minimumNoticeHours: 2, maxDaysAhead: 30, confirmationMode: "instant", price: "", locationKind: "video", locationValue: "",
-        routingStrategy: "STRICT", hostUserIds: [userId],
+        routingStrategy: "STRICT", hostUserIds: [userId], resourceCapacity: 1, customFields: [],
       };
 }
 
@@ -248,6 +257,8 @@ function EventTypeForm({ data, draft, setDraft, onDone }: { data: Studio; draft:
           confirmationMode: draft.confirmationMode, priceCents: price, currency: "eur",
           routingStrategy: ws ? draft.routingStrategy : "STRICT", locationKind: draft.locationKind,
           locationValue: draft.locationValue.trim() || null,
+          resourceCapacity: Math.min(100, Math.max(1, Math.round(draft.resourceCapacity) || 1)),
+          customFields: draft.customFields.map((f) => ({ ...f, label: f.label.trim() })).filter((f) => f.label),
           hostUserIds: ws ? (draft.routingStrategy === "STRICT" ? draft.hostUserIds.slice(0, 1) : draft.hostUserIds) : [data.userId],
         },
       },
@@ -362,11 +373,61 @@ function EventTypeForm({ data, draft, setDraft, onDone }: { data: Studio; draft:
           </>
         )}
       </div>
+      <div className="mt-5 grid gap-4 sm:grid-cols-2">
+        <NumberField label="Capaciteit per tijdslot" value={draft.resourceCapacity} onChange={(n) => set("resourceCapacity", n)} min={1} max={100} />
+        <p className="self-end text-xs text-muted-foreground">Meer dan 1 = meerdere gasten tegelijk in hetzelfde tijdslot (groepssessie, meerdere stoelen).</p>
+      </div>
+      <IntakeEditor fields={draft.customFields} onChange={(f) => set("customFields", f)} />
       <div className="mt-6 flex flex-wrap gap-2">
         <Button onClick={submit} disabled={saving}>{saving && <Loader2 className="h-4 w-4 animate-spin" />}{t("booking.type.save")}</Button>
         <Button variant="soft" onClick={onDone}>{t("booking.public.back")}</Button>
       </div>
     </Panel>
+  );
+}
+
+// ---------- intake fields ----------
+
+const FIELD_TYPES: { v: IntakeField["type"]; l: string }[] = [
+  { v: "text", l: "Korte tekst" }, { v: "textarea", l: "Lange tekst" }, { v: "select", l: "Keuzelijst" },
+  { v: "checkbox", l: "Vinkje" }, { v: "phone", l: "Telefoon" },
+];
+
+function IntakeEditor({ fields, onChange }: { fields: IntakeField[]; onChange: (f: IntakeField[]) => void }) {
+  const upd = (i: number, patch: Partial<IntakeField>) => onChange(fields.map((f, j) => (j === i ? { ...f, ...patch } : f)));
+  const add = () => {
+    let n = fields.length + 1;
+    while (fields.some((f) => f.id === `q${n}`)) n++;
+    onChange([...fields, { id: `q${n}`, label: "", type: "text", required: false, options: [], sensitive: false }]);
+  };
+  return (
+    <div className="mt-6 space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold">Intakevragen</h3>
+        <p className="text-xs text-muted-foreground">Gasten vullen deze in na het kiezen van een tijdslot. Gevoelige antwoorden worden versleuteld opgeslagen en alleen aan jou getoond.</p>
+      </div>
+      {fields.map((f, i) => (
+        <div key={f.id} className="space-y-2 rounded-lg border border-border bg-background p-3">
+          <div className="flex flex-wrap gap-2">
+            <Input className="min-w-0 flex-1" placeholder="Vraag (bv. Allergieën of klachten)" maxLength={120} value={f.label} onChange={(e) => upd(i, { label: e.target.value })} />
+            <Select value={f.type} onValueChange={(v) => upd(i, { type: v as IntakeField["type"] })}>
+              <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+              <SelectContent>{FIELD_TYPES.map((x) => <SelectItem key={x.v} value={x.v}>{x.l}</SelectItem>)}</SelectContent>
+            </Select>
+            <Button size="sm" variant="ghost" aria-label="Vraag verwijderen" onClick={() => onChange(fields.filter((_, j) => j !== i))}><Trash2 className="h-4 w-4" /></Button>
+          </div>
+          {f.type === "select" && (
+            <Input placeholder="Opties, gescheiden door komma's" value={f.options.join(", ")}
+              onChange={(e) => upd(i, { options: e.target.value.split(",").map((o) => o.trim()).filter(Boolean).slice(0, 20) })} />
+          )}
+          <div className="flex flex-wrap gap-4 text-sm">
+            <label className="flex items-center gap-2"><Switch checked={f.required} onCheckedChange={(v) => upd(i, { required: v })} />Verplicht</label>
+            <label className="flex items-center gap-2"><Switch checked={f.sensitive} onCheckedChange={(v) => upd(i, { sensitive: v })} />Gevoelig (versleuteld)</label>
+          </div>
+        </div>
+      ))}
+      {fields.length < 20 && <Button size="sm" variant="soft" onClick={add}>+ Vraag toevoegen</Button>}
+    </div>
   );
 }
 
@@ -396,6 +457,7 @@ function Availability({ data }: { data: Studio }) {
     if (ok) { toast.success(t("booking.type.saved")); await qc.invalidateQueries({ queryKey: QK }); } else toast.error(t("booking.err.generic"));
   };
   return (
+    <div className="space-y-4">
     <Panel>
       <p className="mb-4 text-sm text-muted-foreground">{t("booking.avail.intro")}</p>
       <div className="mb-4 max-w-sm space-y-1.5">
@@ -420,6 +482,77 @@ function Availability({ data }: { data: Studio }) {
         ))}
       </div>
       <Button className="mt-5" onClick={submit} disabled={saving}>{saving && <Loader2 className="h-4 w-4 animate-spin" />}{t("booking.avail.save")}</Button>
+    </Panel>
+    <Exceptions data={data} tz={tz} />
+    </div>
+  );
+}
+
+/** Converts a wall-clock date+time in `tz` to a UTC ISO instant. */
+function zonedToUtc(date: string, time: string, tz: string) {
+  const guess = new Date(`${date}T${time}:00Z`);
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(guess);
+  const g = (k: string) => Number(parts.find((p) => p.type === k)?.value);
+  const asUtc = Date.UTC(g("year"), g("month") - 1, g("day"), g("hour") % 24, g("minute"));
+  return new Date(guess.getTime() - (asUtc - guess.getTime())).toISOString();
+}
+
+function Exceptions({ data, tz }: { data: Studio; tz: string }) {
+  const { locale } = useI18n();
+  const qc = useQueryClient();
+  const add = useServerFn(addAvailabilityException);
+  const remove = useServerFn(removeAvailabilityException);
+  const [f, setF] = useState({ kind: "busy" as "busy" | "free", from: "", to: "", allDay: true, start: "09:00", end: "17:00" });
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    if (!f.from) return toast.error("Kies een begindatum.");
+    const to = f.to || f.from;
+    if (to < f.from) return toast.error("De einddatum ligt voor de begindatum.");
+    const endDay = new Date(`${to}T00:00:00Z`); endDay.setUTCDate(endDay.getUTCDate() + 1);
+    const startUtc = zonedToUtc(f.from, f.allDay ? "00:00" : f.start, tz);
+    const endUtc = f.allDay ? zonedToUtc(endDay.toISOString().slice(0, 10), "00:00", tz) : zonedToUtc(to, f.end, tz);
+    setBusy(true);
+    const r = await add({ data: { kind: f.kind, startUtc, endUtc } }).catch(() => ({ ok: false as const, reason: "invalid" }));
+    setBusy(false);
+    if (!r.ok) return toast.error(r.reason === "too_many_overrides" ? "Maximaal 100 uitzonderingen." : "Uitzondering kon niet worden opgeslagen.");
+    toast.success("Uitzondering opgeslagen");
+    setF({ ...f, from: "", to: "" });
+    await qc.invalidateQueries({ queryKey: QK });
+  };
+  const fmt = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short", timeZone: tz });
+  return (
+    <Panel>
+      <h3 className="text-sm font-semibold">Uitzonderingen</h3>
+      <p className="mb-4 text-xs text-muted-foreground">Bijvoorbeeld vakantie van 1 tot 15 augustus, of een extra opening buiten je vaste uren.</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label>Soort</Label>
+          <Select value={f.kind} onValueChange={(v) => setF({ ...f, kind: v as "busy" | "free" })}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="busy">Gesloten / afwezig</SelectItem><SelectItem value="free">Extra beschikbaar</SelectItem></SelectContent>
+          </Select>
+        </div>
+        <label className="flex items-center gap-2 self-end text-sm"><Switch checked={f.allDay} onCheckedChange={(v) => setF({ ...f, allDay: v })} />Hele dag(en)</label>
+        <div className="space-y-1.5"><Label>Van</Label><Input type="date" value={f.from} onChange={(e) => setF({ ...f, from: e.target.value })} /></div>
+        <div className="space-y-1.5"><Label>Tot en met</Label><Input type="date" value={f.to} min={f.from} onChange={(e) => setF({ ...f, to: e.target.value })} /></div>
+        {!f.allDay && (
+          <>
+            <div className="space-y-1.5"><Label>Vanaf</Label><Input type="time" step={900} value={f.start} onChange={(e) => setF({ ...f, start: e.target.value })} /></div>
+            <div className="space-y-1.5"><Label>Tot</Label><Input type="time" step={900} value={f.end} onChange={(e) => setF({ ...f, end: e.target.value })} /></div>
+          </>
+        )}
+      </div>
+      <Button className="mt-4" onClick={submit} disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin" />}Uitzondering toevoegen</Button>
+      {data.overrides.length > 0 && (
+        <ul className="mt-4 space-y-2">
+          {data.overrides.map((o) => (
+            <li key={o.id} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm">
+              <span className="min-w-0"><Badge variant={o.kind === "busy" ? "secondary" : "default"} className="mr-2">{o.kind === "busy" ? "Gesloten" : "Extra"}</Badge>{fmt.format(new Date(o.startUtc))} – {fmt.format(new Date(o.endUtc))}</span>
+              <Button size="sm" variant="ghost" aria-label="Uitzondering verwijderen" onClick={async () => { await remove({ data: { id: o.id } }).catch(() => undefined); await qc.invalidateQueries({ queryKey: QK }); }}><Trash2 className="h-4 w-4" /></Button>
+            </li>
+          ))}
+        </ul>
+      )}
     </Panel>
   );
 }
