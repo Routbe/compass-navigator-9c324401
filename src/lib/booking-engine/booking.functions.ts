@@ -6,7 +6,7 @@ import { availabilityRule, bookingRequest, caldavCredentials, eventTypeInput, ic
 const uuid = z.string().uuid();
 const fail = (e: unknown) => {
   const m = e instanceof Error ? e.message : "error";
-  return ["slug_taken", "host_not_member", "Forbidden", "forbidden", "not_found", "too_many_calendars", "encryption_unavailable"].includes(m) ? m : "error";
+  return ["slug_taken", "host_not_member", "Forbidden", "forbidden", "not_found", "too_many_calendars", "encryption_unavailable", "too_many_overrides"].includes(m) ? m : "error";
 };
 
 // ---------- public (visitor) ----------
@@ -147,4 +147,44 @@ export const actOnBooking = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const s = await import("./manage.server");
     return s.bookingAction(context.userId, data.id, data.action);
+  });
+
+export const getNextBookingSlots = createServerFn({ method: "GET" })
+  .inputValidator((input: unknown) => z.object({ handle: z.string().min(1).max(64), eventTypeId: uuid.nullable() }).parse(input))
+  .handler(async ({ data }) => {
+    const { setResponseHeader } = await import("@tanstack/react-start/server");
+    setResponseHeader("Cache-Control", "public, max-age=60");
+    const s = await import("./public.server");
+    try {
+      return await s.nextPublicSlots(data.handle, data.eventTypeId, 3);
+    } catch (e) {
+      console.error("[booking] next slots", e instanceof Error ? e.message : "error");
+      return null;
+    }
+  });
+
+export const addAvailabilityException = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .inputValidator((input: unknown) =>
+    z.object({ kind: z.enum(["free", "busy"]), startUtc: z.string().datetime(), endUtc: z.string().datetime() })
+      .refine((v) => new Date(v.endUtc) > new Date(v.startUtc), { message: "end_before_start" })
+      .refine((v) => new Date(v.endUtc).getTime() - new Date(v.startUtc).getTime() <= 366 * 86400000, { message: "too_long" })
+      .parse(input))
+  .handler(async ({ data, context }) => {
+    const s = await import("./manage.server");
+    try {
+      await s.addOverride(context.userId, data.kind, data.startUtc, data.endUtc);
+      return { ok: true as const };
+    } catch (e) {
+      return { ok: false as const, reason: fail(e) };
+    }
+  });
+
+export const removeAvailabilityException = createServerFn({ method: "POST" })
+  .middleware([requireAuth])
+  .inputValidator((input: unknown) => z.object({ id: uuid }).parse(input))
+  .handler(async ({ data, context }) => {
+    const s = await import("./manage.server");
+    await s.removeOverride(context.userId, data.id);
+    return { ok: true };
   });

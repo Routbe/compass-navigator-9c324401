@@ -101,6 +101,7 @@ export async function nextPublicSlots(handle: string, eventTypeId: string | null
     join public.profiles p on p.id = t.user_id
     where lower(p.username) = lower(${handle}) and t.is_active
       and coalesce((p.display_prefs ->> 'publicProfile')::boolean, true)
+      and not coalesce(p.is_banned, false) and not coalesce(p.is_suspended, false)
       and (${eventTypeId}::uuid is null or t.id = ${eventTypeId}::uuid)
     order by t.created_at limit 1`) as { id: string; title: string }[];
   const t = rows[0];
