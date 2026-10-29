@@ -6,3 +6,13 @@
 - [x] Fase 5: eigen status, API-sleutel, privacyregels, publiek endpoint
 - [ ] Migratie db/106 draaien (wacht op database-sleutel; tabel wordt ook automatisch aangemaakt)
 - [ ] Video-upload (Pro) naar Scaleway: wacht op opslagsleutels om te testen
+- [x] Logo's Mastodon/wsocial.eu overal gelijk, naam "wsocial.eu"
+- [ ] Bovenbalk-glitch in venster Live integratie toevoegen
+- [ ] Snapchat-koppeling herstellen
+- [ ] Mastodon rel="me" verificatie bij Identiteit
+- [x] Scope-wisselaar in profielmenu op alle pagina's
+- [x] Workspace publieke pagina rout.be/w/slug (slug: min 3, a-z0-9-, gereserveerde woorden)
+- [ ] Links/statistieken/instellingen per scope
+- [ ] Rondleiding als compact (?) icoon
+- [x] typecheck + tests
+- [ ] db/107 migratie draaien (wacht op database-sleutel)

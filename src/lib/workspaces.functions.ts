@@ -55,10 +55,10 @@ export const createWorkspace = createServerFn({ method: "POST" })
     const { sql } = await import("@/lib/neon");
     const { setActiveWorkspaceCookie } = await import("./workspaces.server");
     const { workspaceSlug } = await import("./workspace-rules");
-    // rout.be/w/<naam><2 cijfers>; probeer vrije cijfers tot het adres uniek is.
+    // rout.be/w/<naam>; bij een bezet adres "-2", "-3", … tot het uniek is.
     let slug = "";
     for (let i = 0; i < 12 && !slug; i++) {
-      const candidate = workspaceSlug(data.name, Math.floor(Math.random() * 100));
+      const candidate = workspaceSlug(data.name, i);
       const taken = (await sql`select 1 from public.workspaces where slug = ${candidate} limit 1`) as unknown[];
       if (!taken.length) slug = candidate;
     }

@@ -43,3 +43,4 @@
 - Custom live status lives in `custom-presence.ts` (pure rules) + `custom-presence.server.ts` (hashed `rp_` keys, 15s cache); visitors read only `/api/public/presence/$handle`, makers write via `POST /api/v1/presence`. Why: no visitor ever contacts a third-party platform and keys are never stored in plain text.
 - Every upload path (presign and direct) calls `checkActiveScopeUpload` before storing. Why: 0 MB scopes must be blocked everywhere, not only on presign.
 - Bookings are managed inside the Studio page switcher; `/studio/booking` only redirects. Why: one page model for profile, tip and booking.
+- Public workspace pages live at /w/$slug via workspace-public.functions.ts and expose only name, avatar, verified domain and a public profile handle; slug validity comes only from isValidWorkspaceSlug in workspace-rules.ts. Why: one rule for server, UI and DB check.

@@ -76,6 +76,7 @@ import { Route as ReviewTokenRouteImport } from './routes/review.$token'
 import { Route as SSlugRouteImport } from './routes/s.$slug'
 import { Route as StatsTokenRouteImport } from './routes/stats.$token'
 import { Route as UUsernameRouteImport } from './routes/u.$username'
+import { Route as WSlugRouteImport } from './routes/w.$slug'
 import { Route as WorkspaceTransferTokenRouteImport } from './routes/workspace-transfer.$token'
 import { Route as AuthenticatedAdminIndexRouteImport } from './routes/_authenticated/admin.index'
 import { Route as AuthenticatedAdminContactRouteImport } from './routes/_authenticated/admin.contact'
@@ -512,6 +513,11 @@ const StatsTokenRoute = StatsTokenRouteImport.update({
 const UUsernameRoute = UUsernameRouteImport.update({
   id: '/u/$username',
   path: '/u/$username',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WSlugRoute = WSlugRouteImport.update({
+  id: '/w/$slug',
+  path: '/w/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
 const WorkspaceTransferTokenRoute = WorkspaceTransferTokenRouteImport.update({
@@ -1149,6 +1155,7 @@ export interface FileRoutesByFullPath {
   '/s/$slug': typeof SSlugRoute
   '/stats/$token': typeof StatsTokenRoute
   '/u/$username': typeof UUsernameRouteWithChildren
+  '/w/$slug': typeof WSlugRoute
   '/workspace-transfer/$token': typeof WorkspaceTransferTokenRoute
   '/auth/': typeof AuthIndexRoute
   '/admin/contact': typeof AuthenticatedAdminContactRoute
@@ -1316,6 +1323,7 @@ export interface FileRoutesByTo {
   '/s/$slug': typeof SSlugRoute
   '/stats/$token': typeof StatsTokenRoute
   '/u/$username': typeof UUsernameRouteWithChildren
+  '/w/$slug': typeof WSlugRoute
   '/workspace-transfer/$token': typeof WorkspaceTransferTokenRoute
   '/auth': typeof AuthIndexRoute
   '/admin/contact': typeof AuthenticatedAdminContactRoute
@@ -1486,6 +1494,7 @@ export interface FileRoutesById {
   '/s/$slug': typeof SSlugRoute
   '/stats/$token': typeof StatsTokenRoute
   '/u/$username': typeof UUsernameRouteWithChildren
+  '/w/$slug': typeof WSlugRoute
   '/workspace-transfer/$token': typeof WorkspaceTransferTokenRoute
   '/auth/': typeof AuthIndexRoute
   '/_authenticated/admin/contact': typeof AuthenticatedAdminContactRoute
@@ -1658,6 +1667,7 @@ export interface FileRouteTypes {
     | '/s/$slug'
     | '/stats/$token'
     | '/u/$username'
+    | '/w/$slug'
     | '/workspace-transfer/$token'
     | '/auth/'
     | '/admin/contact'
@@ -1825,6 +1835,7 @@ export interface FileRouteTypes {
     | '/s/$slug'
     | '/stats/$token'
     | '/u/$username'
+    | '/w/$slug'
     | '/workspace-transfer/$token'
     | '/auth'
     | '/admin/contact'
@@ -1994,6 +2005,7 @@ export interface FileRouteTypes {
     | '/s/$slug'
     | '/stats/$token'
     | '/u/$username'
+    | '/w/$slug'
     | '/workspace-transfer/$token'
     | '/auth/'
     | '/_authenticated/admin/contact'
@@ -2154,6 +2166,7 @@ export interface RootRouteChildren {
   SSlugRoute: typeof SSlugRoute
   StatsTokenRoute: typeof StatsTokenRoute
   UUsernameRoute: typeof UUsernameRouteWithChildren
+  WSlugRoute: typeof WSlugRoute
   WorkspaceTransferTokenRoute: typeof WorkspaceTransferTokenRoute
   ApiAdminMailCheckRoute: typeof ApiAdminMailCheckRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
@@ -2681,6 +2694,13 @@ declare module '@tanstack/react-router' {
       path: '/u/$username'
       fullPath: '/u/$username'
       preLoaderRoute: typeof UUsernameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/w/$slug': {
+      id: '/w/$slug'
+      path: '/w/$slug'
+      fullPath: '/w/$slug'
+      preLoaderRoute: typeof WSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/workspace-transfer/$token': {
@@ -3689,6 +3709,7 @@ const rootRouteChildren: RootRouteChildren = {
   SSlugRoute: SSlugRoute,
   StatsTokenRoute: StatsTokenRoute,
   UUsernameRoute: UUsernameRouteWithChildren,
+  WSlugRoute: WSlugRoute,
   WorkspaceTransferTokenRoute: WorkspaceTransferTokenRoute,
   ApiAdminMailCheckRoute: ApiAdminMailCheckRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
