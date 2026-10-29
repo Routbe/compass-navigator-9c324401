@@ -6,6 +6,34 @@ import { sql } from "@/lib/neon";
 import { assertWorkspaceRole, resolveActiveWorkspace } from "@/lib/workspaces.server";
 import { recomputeUser } from "./recompute.server";
 import type { EventTypeInput, AvailabilityRule } from "./types";
+import { intakeFields } from "./intake";
+
+/** Host-only view of intake answers: labels + values; sealed ones are opened server-side. */
+async function readIntake(b: Record<string, unknown>): Promise<{ label: string; value: string }[]> {
+  const stored = b["intake_answers"] as { plain?: Record<string, unknown>; sealed?: { ciphertext: string; iv: string } } | null;
+  if (!stored) return [];
+  const fields = intakeFields.safeParse(b["custom_fields"] ?? []).data ?? [];
+  let all: Record<string, unknown> = { ...(stored.plain ?? {}) };
+  if (stored.sealed) {
+    try {
+      const { open } = await import("@/lib/crypto/secretbox.server");
+      all = { ...all, ...(JSON.parse(await open(stored.sealed.ciphertext, stored.sealed.iv, `intake:${String(b["event_type_id"])}`)) as object) };
+    } catch { all["_"] = "🔒"; }
+  }
+  return Object.entries(all).map(([k, v]) => ({ label: fields.find((f) => f.id === k)?.label ?? k, value: v === true ? "✓" : v === false ? "—" : String(v) }));
+}
+
+/** Exceptions next to weekly hours: 'busy' = closed (holiday), 'free' = extra opening. */
+export async function addOverride(userId: string, kind: "free" | "busy", startUtc: string, endUtc: string) {
+  const n = (await sql`select count(*)::int as n from public.availability_overrides where user_id = ${userId}::uuid and end_utc > now()`) as { n: number }[];
+  if (n[0]!.n >= 100) throw new Error("too_many_overrides");
+  await sql`insert into public.availability_overrides (user_id, kind, start_utc, end_utc) values (${userId}::uuid, ${kind}, ${startUtc}::timestamptz, ${endUtc}::timestamptz)`;
+  await recomputeUser(userId);
+}
+export async function removeOverride(userId: string, id: string) {
+  await sql`delete from public.availability_overrides where id = ${id}::uuid and user_id = ${userId}::uuid`;
+  await recomputeUser(userId);
+}
 
 const ACTIVE = ["held", "pending_payment", "requested", "confirmed"];
 
@@ -21,6 +49,8 @@ async function assertCanManageEventType(userId: string, eventTypeId: string) {
 export async function overview(userId: string) {
   const { workspaceId, role } = await resolveActiveWorkspace(userId);
   const canWs = Boolean(workspaceId && (role === "owner" || role === "admin"));
+  const overrides = (await sql`select id, kind, start_utc, end_utc from public.availability_overrides
+    where user_id = ${userId}::uuid and end_utc > now() order by start_utc limit 100`) as Record<string, unknown>[];
   const [types, calendars, bookings, rules, members] = (await Promise.all([
     sql`select t.*, coalesce((select json_agg(json_build_object('userId', h.user_id, 'priority', h.priority) order by h.priority desc)
           from public.booking_event_type_hosts h where h.event_type_id = t.id), '[]'::json) as hosts
@@ -29,7 +59,7 @@ export async function overview(userId: string) {
         order by t.created_at desc limit 100`,
     sql`select id, adapter, label, sync_status, last_error_code, last_synced_at from public.connected_calendars
         where user_id = ${userId}::uuid order by created_at`,
-    sql`select b.id, b.status, b.start_utc, b.end_utc, b.guest_name, b.guest_email, b.guest_timezone, b.guest_note, t.title
+    sql`select b.id, b.status, b.start_utc, b.end_utc, b.guest_name, b.guest_email, b.guest_timezone, b.guest_note, b.intake_answers, b.event_type_id, t.title, t.custom_fields
         from public.bookings b join public.booking_event_types t on t.id = b.event_type_id
         where b.host_user_id = ${userId}::uuid and b.end_utc > now() - interval '1 day' and b.status = any(${ACTIVE}::text[])
         order by (b.status = 'requested') desc, b.start_utc limit 100`,
@@ -53,13 +83,18 @@ export async function overview(userId: string) {
       priceCents: t["price_cents"] == null ? null : Number(t["price_cents"]),
       routingStrategy: String(t["routing_strategy"]) as "STRICT" | "ROUND_ROBIN" | "COLLECTIVE",
       locationKind: String(t["location_kind"]) as "video" | "address" | "phone", locationValue: s(t["location_value"]),
+      resourceCapacity: Number(t["resource_capacity"] ?? 1),
+      customFields: intakeFields.safeParse(t["custom_fields"] ?? []).data ?? [],
       isActive: Boolean(t["is_active"]), hosts: (t["hosts"] as { userId: string; priority: number }[]) ?? [],
     })),
     calendars: calendars.map((c) => ({
       id: String(c["id"]), adapter: String(c["adapter"]), label: s(c["label"]), syncStatus: String(c["sync_status"]),
       lastErrorCode: s(c["last_error_code"]), lastSyncedAt: c["last_synced_at"] ? new Date(String(c["last_synced_at"])).toISOString() : null,
     })),
-    bookings: bookings.map((b) => ({
+    overrides: overrides.map((o) => ({ id: String(o["id"]), kind: String(o["kind"]) as "free" | "busy",
+      startUtc: new Date(String(o["start_utc"])).toISOString(), endUtc: new Date(String(o["end_utc"])).toISOString() })),
+    bookings: (await Promise.all(bookings.map(async (b) => ({ ...b, intake: await readIntake(b) })))).map((b) => ({
+      intake: b.intake,
       id: String(b["id"]), status: String(b["status"]), title: String(b["title"]),
       startUtc: new Date(String(b["start_utc"])).toISOString(), endUtc: new Date(String(b["end_utc"])).toISOString(),
       guestName: String(b["guest_name"]), guestEmail: String(b["guest_email"]), guestTimezone: String(b["guest_timezone"]), guestNote: s(b["guest_note"]),
@@ -86,14 +121,15 @@ export async function saveEventType(userId: string, id: string | null, input: Ev
         duration_minutes = ${v.durationMinutes}, buffer_before_minutes = ${v.bufferBeforeMinutes}, buffer_after_minutes = ${v.bufferAfterMinutes},
         minimum_notice_hours = ${v.minimumNoticeHours}, max_days_ahead = ${v.maxDaysAhead}, slot_step_minutes = ${v.slotStepMinutes},
         confirmation_mode = ${v.confirmationMode}, price_cents = ${v.priceCents}, currency = ${v.currency},
-        routing_strategy = ${v.routingStrategy}, location_kind = ${v.locationKind}, location_value = ${v.locationValue}, updated_at = now()
+        routing_strategy = ${v.routingStrategy}, location_kind = ${v.locationKind}, location_value = ${v.locationValue},
+        resource_capacity = ${v.resourceCapacity}, custom_fields = ${JSON.stringify(v.customFields)}::jsonb, updated_at = now()
       where id = ${etId}::uuid`
     : sql`insert into public.booking_event_types (id, user_id, workspace_id, slug, title, description, duration_minutes,
         buffer_before_minutes, buffer_after_minutes, minimum_notice_hours, max_days_ahead, slot_step_minutes, confirmation_mode,
-        price_cents, currency, routing_strategy, location_kind, location_value)
+        price_cents, currency, routing_strategy, location_kind, location_value, resource_capacity, custom_fields)
       values (${etId}::uuid, ${v.ownerUserId}, ${v.workspaceId}, ${v.slug}, ${v.title}, ${v.description}, ${v.durationMinutes},
         ${v.bufferBeforeMinutes}, ${v.bufferAfterMinutes}, ${v.minimumNoticeHours}, ${v.maxDaysAhead}, ${v.slotStepMinutes}, ${v.confirmationMode},
-        ${v.priceCents}, ${v.currency}, ${v.routingStrategy}, ${v.locationKind}, ${v.locationValue})`;
+        ${v.priceCents}, ${v.currency}, ${v.routingStrategy}, ${v.locationKind}, ${v.locationValue}, ${v.resourceCapacity}, ${JSON.stringify(v.customFields)}::jsonb)`;
   const priorities = v.hostUserIds.map((_, i) => v.hostUserIds.length - i);
   try {
     await sql.transaction([

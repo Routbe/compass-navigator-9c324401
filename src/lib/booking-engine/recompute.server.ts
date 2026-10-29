@@ -26,8 +26,13 @@ export async function recomputeUser(userId: string, now = new Date()) {
     sql`select kind, start_utc as s, end_utc as e from public.availability_overrides where user_id = ${userId}::uuid and end_utc > ${F}::timestamptz and start_utc < ${T}::timestamptz`,
     sql`select ev.start_utc as s, ev.end_utc as e from public.calendar_events ev join public.connected_calendars c on c.id = ev.calendar_id
         where c.user_id = ${userId}::uuid and ev.is_blocking and ev.end_utc > ${F}::timestamptz and ev.start_utc < ${T}::timestamptz`,
-    sql`select block_start_utc as s, block_end_utc as e from public.bookings where host_user_id = ${userId}::uuid
-        and status in ('held','pending_payment','requested','confirmed') and block_end_utc > ${F}::timestamptz and block_start_utc < ${T}::timestamptz`,
+    // Shared-capacity sessions only block the host once every seat is taken.
+    sql`select b.block_start_utc as s, b.block_end_utc as e from public.bookings b
+        join public.booking_event_types t on t.id = b.event_type_id
+        where b.host_user_id = ${userId}::uuid
+        and b.status in ('held','pending_payment','requested','confirmed') and b.block_end_utc > ${F}::timestamptz and b.block_start_utc < ${T}::timestamptz
+        and (not b.shared_slot or (select count(*) from public.bookings o where o.event_type_id = b.event_type_id and o.start_utc = b.start_utc
+          and o.host_user_id = b.host_user_id and o.shared_slot and o.status in ('held','pending_payment','requested','confirmed')) >= t.resource_capacity)`,
   ])) as unknown as [
     { weekday: number; start_minute: number; end_minute: number; timezone: string }[],
     { kind: string; s: string; e: string }[],
