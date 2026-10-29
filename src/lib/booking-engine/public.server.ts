@@ -2,11 +2,12 @@
 import { sql } from "@/lib/neon";
 import { bookableStarts } from "./bitmap";
 import type { EventTypeRules } from "./types";
+import { intakeFields } from "./intake";
 
 export async function publicEventType(id: string) {
   const rows = (await sql`select t.id, t.title, t.description, t.duration_minutes, t.price_cents, t.currency, t.location_kind,
       t.confirmation_mode, t.routing_strategy, t.minimum_notice_hours, t.max_days_ahead, t.slot_step_minutes,
-      t.buffer_before_minutes, t.buffer_after_minutes, t.workspace_id,
+      t.buffer_before_minutes, t.buffer_after_minutes, t.workspace_id, t.custom_fields, t.resource_capacity,
       coalesce(w.name, p.display_name) as host_name
     from public.booking_event_types t
     left join public.workspaces w on w.id = t.workspace_id
@@ -19,6 +20,7 @@ export async function publicEventType(id: string) {
     durationMinutes: Number(r["duration_minutes"]), priceCents: r["price_cents"] == null ? null : Number(r["price_cents"]),
     currency: String(r["currency"]), locationKind: String(r["location_kind"]) as "video" | "address" | "phone",
     confirmationMode: String(r["confirmation_mode"]) as "instant" | "request", hostName: r["host_name"] ? String(r["host_name"]) : null,
+    customFields: intakeFields.safeParse(r["custom_fields"] ?? []).data ?? [], capacity: Number(r["resource_capacity"] ?? 1),
     rules: {
       id: String(r["id"]), workspaceId: (r["workspace_id"] as string | null) ?? null,
       durationMinutes: Number(r["duration_minutes"]), bufferBeforeMinutes: Number(r["buffer_before_minutes"]),
@@ -91,4 +93,17 @@ async function refreshStaleHosts(eventTypeId: string, now: Date): Promise<void> 
   } catch (e) {
     console.error("[booking] stale check failed", e instanceof Error ? e.message : "unknown");
   }
+}
+
+/** Smart widget: the first `n` open starts of an active type on a public profile (cache only, no guest data). */
+export async function nextPublicSlots(handle: string, eventTypeId: string | null, n = 3) {
+  const rows = (await sql`select t.id::text as id, t.title from public.booking_event_types t
+    join public.profiles p on p.id = t.user_id
+    where lower(p.username) = lower(${handle}) and t.is_active
+      and coalesce((p.display_prefs ->> 'publicProfile')::boolean, true)
+      and (${eventTypeId}::uuid is null or t.id = ${eventTypeId}::uuid)
+    order by t.created_at limit 1`) as { id: string; title: string }[];
+  const t = rows[0];
+  if (!t) return null;
+  return { eventTypeId: t.id, title: t.title, slots: (await publicSlots(t.id)).slice(0, Math.min(5, n)) };
 }
