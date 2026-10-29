@@ -1,6 +1,7 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { Building2, ExternalLink } from "lucide-react";
 import { getPublicWorkspace } from "@/lib/workspace-public.functions";
+import { profileImageSrc } from "@/lib/image-proxy-rules";
 
 export const Route = createFileRoute("/w/$slug")({
   loader: async ({ params }) => {
@@ -34,7 +35,7 @@ function WorkspacePage() {
     <main className="flex min-h-screen items-center justify-center bg-background px-4 py-16">
       <section className="w-full max-w-md rounded-2xl border bg-card p-8 text-center text-card-foreground">
         {ws.avatarUrl ? (
-          <img src={`/api/public/proxy-image?url=${encodeURIComponent(ws.avatarUrl)}`} alt="" className="mx-auto h-24 w-24 rounded-2xl object-cover" />
+          <img src={profileImageSrc(ws.avatarUrl) ?? undefined} alt="" className="mx-auto h-24 w-24 rounded-2xl object-cover" />
         ) : (
           <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-2xl bg-muted">
             <Building2 className="h-10 w-10 text-muted-foreground" aria-hidden />
