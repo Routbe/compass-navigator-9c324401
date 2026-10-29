@@ -156,7 +156,7 @@ d2("smart paste for added platforms", () => {
     e2(xh("patreon", "https://www.patreon.com/c/jane?utm=1")).toBe("jane");
     e2(xh("calendly", "https://calendly.com/jane/30min")).toBe("jane");
   });
-  i2("W.social appends .wsocial.eu", () => {
+  i2("wsocial.eu appends .wsocial.eu", () => {
     e2(su("wsocial", "jane")).toContain("jane.wsocial.eu");
   });
 });

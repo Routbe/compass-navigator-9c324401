@@ -25,7 +25,7 @@ export const AT_NETWORKS: Record<AtNetwork["id"], AtNetwork> = {
   },
   wsocial: {
     id: "wsocial",
-    label: "Wsocial",
+    label: "wsocial.eu",
     suffixes: ["wsocial.eu"],
     appView: "https://public.api.bsky.app",
   },

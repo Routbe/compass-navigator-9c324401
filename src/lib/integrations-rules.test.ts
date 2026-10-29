@@ -12,7 +12,7 @@ describe("integration values", () => {
   it("accepts a lightning address", () => {
     expect(normalizeIntegrationValue("lightning", "Me@Getalby.com")).toBe("me@getalby.com");
   });
-  it("completes a bare W.social handle", () => {
+  it("completes a bare wsocial.eu handle", () => {
     expect(normalizeIntegrationValue("wsocial", "@anna")).toBe("anna.wsocial.eu");
   });
   it("normalizes a YouTube handle and channel id", () => {

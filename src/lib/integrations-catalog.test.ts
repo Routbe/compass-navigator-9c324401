@@ -13,7 +13,7 @@ describe("integrations grid", () => {
   it("crypto tiles are live, other payment tiles are coming soon", () => {
     expect(filterIntegrations("payments").filter(isLive).map((i) => i.id)).toEqual(["lightning", "monero", "ethereum"]);
   });
-  it("W.social sits in Socials and connects by handle", () => {
+  it("wsocial.eu sits in Socials and connects by handle", () => {
     expect(filterIntegrations("socials").find((i) => i.id === "wsocial")?.mode).toBe("handle");
   });
 });
