@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { intakeFields } from "./intake";
 
 /**
  * ROUT Unified Booking Engine — shared schemas. Every instant crossing this
@@ -47,6 +48,8 @@ export const eventTypeInput = z
     locationKind: locationKind.default("video"),
     locationValue: z.string().max(500).nullable().default(null),
     hostUserIds: z.array(z.string().uuid()).min(1).max(50),
+    resourceCapacity: z.number().int().min(1).max(100).default(1),
+    customFields: intakeFields.default([]),
   })
   .refine((v) => (v.ownerUserId === null) !== (v.workspaceId === null), { message: "exactly_one_owner" })
   .refine((v) => v.workspaceId !== null || v.routingStrategy === "STRICT", { message: "personal_types_are_strict" })
@@ -94,12 +97,13 @@ export const bookingRequest = z.object({
   guestEmail: z.string().trim().toLowerCase().email().max(254),
   guestTimezone: ianaZone,
   guestNote: z.string().max(2000).nullable().default(null),
+  intakeAnswers: z.record(z.string().max(32), z.union([z.string().max(2000), z.boolean()])).nullable().default(null),
 });
 export type BookingRequest = z.infer<typeof bookingRequest>;
 
 export type BookingOutcome =
   | { ok: true; bookingIds: string[]; status: z.infer<typeof bookingStatus>; hostUserIds: string[]; checkoutUrl: string | null }
-  | { ok: false; reason: "slot_taken" | "outside_availability" | "too_soon" | "too_far" | "inactive" | "payment_unavailable" };
+  | { ok: false; reason: "slot_taken" | "outside_availability" | "too_soon" | "too_far" | "inactive" | "payment_unavailable" | "invalid_intake" };
 
 /** Zero-knowledge busy block: the ONLY shape a calendar adapter may emit. */
 export interface BusyBlock {

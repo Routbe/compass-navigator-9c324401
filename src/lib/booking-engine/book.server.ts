@@ -11,6 +11,7 @@ import { blockRange } from "./bitmap";
 import { roundRobinOrder, type HostCandidate } from "./routing";
 import { ACTIVE_BOOKING_STATUSES, type BookingOutcome, type BookingRequest, type EventTypeRules } from "./types";
 import { isoDay } from "./time";
+import { intakeFields, splitSensitive, validateIntake, type IntakeField } from "./intake";
 
 const HOLD_MINUTES = 30; // Stripe Checkout's minimum session lifetime
 
@@ -23,10 +24,10 @@ export function isSlotTakenError(err: unknown): boolean {
 /** Lock key per host per UTC day; also used in sorted order for collective bookings (no deadlocks). */
 export const lockKey = (hostUserId: string, startUtc: Date) => `booking:${hostUserId}:${isoDay(startUtc)}`;
 
-async function loadEventType(id: string): Promise<(EventTypeRules & { isActive: boolean; hosts: { userId: string; priority: number }[] }) | null> {
+async function loadEventType(id: string): Promise<(EventTypeRules & { isActive: boolean; capacity: number; customFields: IntakeField[]; hosts: { userId: string; priority: number }[] }) | null> {
   const rows = (await sql`select id, workspace_id, duration_minutes, buffer_before_minutes, buffer_after_minutes,
       minimum_notice_hours, max_days_ahead, slot_step_minutes, confirmation_mode, price_cents, currency,
-      routing_strategy, title, location_kind, location_value, is_active,
+      routing_strategy, title, location_kind, location_value, is_active, resource_capacity, custom_fields,
       coalesce((select json_agg(json_build_object('userId', h.user_id, 'priority', h.priority))
         from public.booking_event_type_hosts h where h.event_type_id = t.id), '[]'::json) as hosts
     from public.booking_event_types t where id = ${id}::uuid`) as Record<string, unknown>[];
@@ -49,6 +50,8 @@ async function loadEventType(id: string): Promise<(EventTypeRules & { isActive: 
     locationKind: r["location_kind"] as EventTypeRules["locationKind"],
     locationValue: (r["location_value"] as string | null) ?? null,
     isActive: Boolean(r["is_active"]),
+    capacity: Math.max(1, Number(r["resource_capacity"] ?? 1)),
+    customFields: intakeFields.safeParse(r["custom_fields"] ?? []).data ?? [],
     hosts: (r["hosts"] as { userId: string; priority: number }[]) ?? [],
   };
 }
@@ -71,17 +74,24 @@ async function freeAndLoad(hostIds: string[], blockStart: Date, blockEnd: Date, 
 function bookingStatements(p: {
   hostIds: string[]; eventTypeId: string; workspaceId: string | null; groupId: string | null;
   range: ReturnType<typeof blockRange>; status: string; req: BookingRequest; holdExpires: Date | null; bookingIds: string[];
+  capacity: number; intake: string | null;
 }) {
+  const shared = p.capacity > 1;
   const s = p.range.startUtc.toISOString(), e = p.range.endUtc.toISOString();
   const bs = p.range.blockStartUtc.toISOString(), be = p.range.blockEndUtc.toISOString();
   const sorted = [...p.hostIds].sort();
   const stmts: ReturnType<typeof sql>[] = [];
   for (const h of sorted) stmts.push(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey(h, p.range.startUtc)}, 0))`);
   for (const h of sorted) {
+    // Exclusive: nothing may overlap. Shared: only same-type, same-start seats may overlap, up to capacity.
     stmts.push(sql`select public.wt_assert(not exists (
         select 1 from public.bookings b where b.host_user_id = ${h}::uuid
           and b.status in ('held','pending_payment','requested','confirmed')
-          and tstzrange(b.block_start_utc, b.block_end_utc, '[)') && tstzrange(${bs}::timestamptz, ${be}::timestamptz, '[)'))
+          and tstzrange(b.block_start_utc, b.block_end_utc, '[)') && tstzrange(${bs}::timestamptz, ${be}::timestamptz, '[)')
+          and not (${shared} and b.shared_slot and b.event_type_id = ${p.eventTypeId}::uuid and b.start_utc = ${s}::timestamptz))
+      and (select count(*) from public.bookings b where b.host_user_id = ${h}::uuid and b.shared_slot
+          and b.event_type_id = ${p.eventTypeId}::uuid and b.start_utc = ${s}::timestamptz
+          and b.status in ('held','pending_payment','requested','confirmed')) < ${p.capacity}
       and not exists (
         select 1 from public.calendar_events ev join public.connected_calendars c on c.id = ev.calendar_id
         where c.user_id = ${h}::uuid and ev.is_blocking and ev.start_utc < ${be}::timestamptz and ev.end_utc > ${bs}::timestamptz),
@@ -89,10 +99,10 @@ function bookingStatements(p: {
   }
   p.hostIds.forEach((h, i) => {
     stmts.push(sql`insert into public.bookings (id, event_type_id, host_user_id, workspace_id, group_id, start_utc, end_utc,
-        block_start_utc, block_end_utc, status, guest_name, guest_email, guest_timezone, guest_note, hold_expires_at, ics_uid)
+        block_start_utc, block_end_utc, status, guest_name, guest_email, guest_timezone, guest_note, hold_expires_at, ics_uid, shared_slot, intake_answers)
       values (${p.bookingIds[i]}::uuid, ${p.eventTypeId}::uuid, ${h}::uuid, ${p.workspaceId}, ${p.groupId}, ${s}::timestamptz, ${e}::timestamptz,
         ${bs}::timestamptz, ${be}::timestamptz, ${p.status}, ${p.req.guestName}, ${p.req.guestEmail}, ${p.req.guestTimezone},
-        ${p.req.guestNote}, ${p.holdExpires?.toISOString() ?? null}, ${`${p.groupId ?? p.bookingIds[i]}@rout.be`})`);
+        ${p.req.guestNote}, ${p.holdExpires?.toISOString() ?? null}, ${`${p.groupId ?? p.bookingIds[i]}@rout.be`}, ${shared}, ${p.intake}::jsonb)`);
     stmts.push(sql`insert into public.availability_jobs (user_id, reason, run_after) values (${h}::uuid, 'booking', now() + interval '20 seconds')
       on conflict (user_id) do update set reason = 'booking', run_after = least(public.availability_jobs.run_after, excluded.run_after)`);
   });
@@ -110,6 +120,20 @@ export async function bookSlot(req: BookingRequest, now = new Date()): Promise<B
   const paid = et.priceCents != null;
   if (paid && !process.env["STRIPE_SECRET_KEY"]) return { ok: false, reason: "payment_unavailable" };
 
+  const checked = validateIntake(et.customFields, req.intakeAnswers ?? {});
+  if (!checked.ok) return { ok: false, reason: "invalid_intake" };
+  let intake: string | null = null;
+  if (Object.keys(checked.answers).length) {
+    const { plain, secret } = splitSensitive(et.customFields, checked.answers);
+    const stored: Record<string, unknown> = { v: 1, plain };
+    if (Object.keys(secret).length) {
+      // Sensitive answers are sealed (AES-GCM) bound to the event type; never logged or sent to third parties.
+      const { seal, encryptionConfigured } = await import("@/lib/crypto/secretbox.server");
+      if (!encryptionConfigured()) return { ok: false, reason: "invalid_intake" };
+      stored["sealed"] = await seal(JSON.stringify(secret), `intake:${et.id}`);
+    }
+    intake = JSON.stringify(stored);
+  }
   const range = blockRange(startUtc, et);
   const status = paid ? "pending_payment" : et.confirmationMode === "request" ? "requested" : "confirmed";
   const holdExpires = paid ? new Date(now.getTime() + HOLD_MINUTES * 60000) : null;
@@ -133,7 +157,7 @@ export async function bookSlot(req: BookingRequest, now = new Date()): Promise<B
     const bookingIds = hostIds.map(() => crypto.randomUUID());
     const groupId = hostIds.length > 1 ? crypto.randomUUID() : null;
     try {
-      await sql.transaction(bookingStatements({ hostIds, eventTypeId: et.id, workspaceId: et.workspaceId, groupId, range, status, req, holdExpires, bookingIds }));
+      await sql.transaction(bookingStatements({ hostIds, eventTypeId: et.id, workspaceId: et.workspaceId, groupId, range, status, req, holdExpires, bookingIds, capacity: et.capacity, intake }));
     } catch (err) {
       if (isSlotTakenError(err)) continue; // round robin: next least-loaded host
       throw err;
